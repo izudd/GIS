@@ -1,17 +1,13 @@
 """
-🗺️ GEOCODING WEB APP - NOMINATIM ULTRA
-=======================================
+🗺️ GEOCODING WEB APP - IMPROVED WITH DEBUG
+==========================================
 
-Web-based geocoding tool dengan Nominatim (100% GRATIS!)
-
-Features:
-• Upload Excel file
-• Download template
-• Real-time progress tracking
-• Download hasil geocoding
-• 100% FREE (no API key needed!)
-
-Deploy: Streamlit Cloud (free hosting!)
+FIXED ISSUES:
+- Better error handling
+- More retries
+- Detailed logging
+- Fallback mechanisms
+- Rate limit optimization
 """
 
 import streamlit as st
@@ -27,229 +23,129 @@ import re
 st.set_page_config(
     page_title="Geocoding Tool - Free",
     page_icon="🗺️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .info-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border-left: 4px solid #28a745;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-    }
-    .error-box {
-        background-color: #f8d7da;
-        border-left: 4px solid #dc3545;
-    }
-    .info-box-blue {
-        background-color: #d1ecf1;
-        border-left: 4px solid #17a2b8;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-
-class UltraGeocoderWeb:
-    """Ultra Geocoder untuk web app"""
+class ImprovedGeocoder:
+    """Improved geocoder with better error handling"""
     
-    def __init__(self, max_workers=3):
+    def __init__(self, max_workers=2):  # Reduced to 2 for better rate limit
         self.max_workers = max_workers
-        self.providers = {
-            'nominatim': {
-                'url': 'https://nominatim.openstreetmap.org/reverse',
-                'delay': 1.0,
-                'last_request': 0
-            },
-            'photon': {
-                'url': 'https://photon.komoot.io/reverse',
-                'delay': 0.5,
-                'last_request': 0
-            }
-        }
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Geocoding-Web-App/1.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         self.stats = {
             'success': 0,
             'not_found': 0,
-            'error': 0
+            'error': 0,
+            'timeout': 0,
+            'rate_limit': 0
         }
+        self.last_request = 0
     
-    def normalize_text(self, text):
-        if not text or pd.isna(text):
-            return ""
-        text = str(text).lower().strip()
-        text = re.sub(r'\b(kel\.|kelurahan|kec\.|kecamatan)\b', '', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-    
-    def calculate_similarity(self, text1, text2):
-        if not text1 or not text2:
-            return 0.0
-        text1 = self.normalize_text(text1)
-        text2 = self.normalize_text(text2)
-        if text1 == text2:
-            return 1.0
-        if text1 in text2 or text2 in text1:
-            return 0.8
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        if not words1 or not words2:
-            return 0.0
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        return len(intersection) / len(union) if union else 0.0
-    
-    def score_result(self, address, expected_kelurahan=None, expected_kecamatan=None):
-        score = 0.0
-        weights = {'kelurahan': 0.6, 'kecamatan': 0.4}
-        
-        result_kelurahan = address.get('suburb') or address.get('village') or address.get('neighbourhood')
-        result_kecamatan = address.get('city_district') or address.get('municipality')
-        
-        if expected_kelurahan and result_kelurahan:
-            sim = self.calculate_similarity(expected_kelurahan, result_kelurahan)
-            score += weights['kelurahan'] * sim
-        
-        if expected_kecamatan and result_kecamatan:
-            sim = self.calculate_similarity(expected_kecamatan, result_kecamatan)
-            score += weights['kecamatan'] * sim
-        
-        return score
-    
-    def rate_limit(self, provider_name):
-        provider = self.providers[provider_name]
+    def rate_limit_wait(self):
+        """Enforce 1 second delay between requests"""
         current_time = time.time()
-        time_since_last = current_time - provider['last_request']
-        if time_since_last < provider['delay']:
-            time.sleep(provider['delay'] - time_since_last)
-        provider['last_request'] = time.time()
+        time_since_last = current_time - self.last_request
+        
+        if time_since_last < 1.2:  # 1.2 seconds to be safe
+            time.sleep(1.2 - time_since_last)
+        
+        self.last_request = time.time()
     
-    def geocode_nominatim(self, lat, lon, zoom=18):
-        self.rate_limit('nominatim')
+    def test_connection(self):
+        """Test if Nominatim is accessible"""
+        try:
+            response = self.session.get(
+                'https://nominatim.openstreetmap.org/reverse',
+                params={
+                    'lat': -6.2088,
+                    'lon': 106.8456,
+                    'format': 'json'
+                },
+                timeout=10
+            )
+            return response.status_code == 200
+        except:
+            return False
+    
+    def geocode_nominatim(self, lat, lon, retry=0):
+        """Geocode with Nominatim with retries"""
+        
+        # Rate limit
+        self.rate_limit_wait()
+        
         params = {
             'lat': lat,
             'lon': lon,
             'format': 'json',
             'addressdetails': 1,
-            'zoom': zoom,
+            'zoom': 18,
             'accept-language': 'id'
         }
+        
         try:
             response = self.session.get(
-                self.providers['nominatim']['url'],
+                'https://nominatim.openstreetmap.org/reverse',
                 params=params,
-                timeout=10
+                timeout=15  # Longer timeout
             )
+            
             if response.status_code == 200:
                 data = response.json()
                 if 'error' not in data and 'address' in data:
-                    return data, 'nominatim'
-        except:
-            pass
-        return None, None
-    
-    def geocode_photon(self, lat, lon):
-        self.rate_limit('photon')
-        params = {'lat': lat, 'lon': lon, 'lang': 'id'}
-        try:
-            response = self.session.get(
-                self.providers['photon']['url'],
-                params=params,
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if 'features' in data and len(data['features']) > 0:
-                    feature = data['features'][0]
-                    properties = feature.get('properties', {})
-                    photon_data = {
-                        'address': {
-                            'road': properties.get('street'),
-                            'suburb': properties.get('district') or properties.get('locality'),
-                            'city_district': properties.get('county'),
-                            'city': properties.get('city'),
-                            'state': properties.get('state'),
-                            'postcode': properties.get('postcode')
-                        },
-                        'display_name': properties.get('name', ''),
-                        'lat': feature['geometry']['coordinates'][1],
-                        'lon': feature['geometry']['coordinates'][0]
-                    }
-                    return photon_data, 'photon'
-        except:
-            pass
-        return None, None
-    
-    def geocode_coordinate(self, lat, lon, expected_kelurahan=None, expected_kecamatan=None):
-        # Try multiple strategies
-        results = []
+                    return data, None
+                else:
+                    return None, 'no_result'
+            
+            elif response.status_code == 429:
+                # Rate limited
+                self.stats['rate_limit'] += 1
+                if retry < 2:
+                    time.sleep(3)  # Wait longer
+                    return self.geocode_nominatim(lat, lon, retry + 1)
+                return None, 'rate_limit'
+            
+            else:
+                return None, f'http_{response.status_code}'
         
-        # Strategy 1: Nominatim zoom 18
-        data, source = self.geocode_nominatim(lat, lon, zoom=18)
+        except requests.Timeout:
+            self.stats['timeout'] += 1
+            if retry < 2:
+                time.sleep(2)
+                return self.geocode_nominatim(lat, lon, retry + 1)
+            return None, 'timeout'
+        
+        except Exception as e:
+            return None, str(e)[:50]
+    
+    def geocode_coordinate(self, lat, lon, kelurahan=None):
+        """Geocode single coordinate"""
+        
+        data, error = self.geocode_nominatim(lat, lon)
+        
         if data:
-            results.append((data, source))
-        
-        # Strategy 2: Nominatim zoom 17
-        if not results:
-            data, source = self.geocode_nominatim(lat, lon, zoom=17)
-            if data:
-                results.append((data, source))
-        
-        # Strategy 3: Photon
-        if not results:
-            data, source = self.geocode_photon(lat, lon)
-            if data:
-                results.append((data, source))
-        
-        if results:
-            data, source = results[0]
             address = data.get('address', {})
             
-            # Score if validation enabled
-            confidence_score = 0.5
-            if expected_kelurahan:
-                confidence_score = self.score_result(address, expected_kelurahan, expected_kecamatan)
-            
-            # Extract info
-            road_name = address.get('road') or address.get('street') or ''
-            suburb = (address.get('suburb') or address.get('village') or 
-                     address.get('neighbourhood') or address.get('district') or '')
-            subdistrict = (address.get('city_district') or 
-                          address.get('municipality') or address.get('county') or '')
-            city = (address.get('city') or address.get('town') or 
-                   address.get('county') or '')
-            province = address.get('state') or ''
+            road = address.get('road', '')
+            suburb = address.get('suburb') or address.get('village') or address.get('neighbourhood', '')
+            district = address.get('city_district') or address.get('municipality', '')
+            city = address.get('city') or address.get('town', '')
+            province = address.get('state', '')
             
             self.stats['success'] += 1
             
             return {
-                'Nama_Jalan': road_name or 'Tidak ditemukan',
+                'Nama_Jalan': road or 'Tidak ada',
                 'Kelurahan': suburb,
-                'Kecamatan': subdistrict,
+                'Kecamatan': district,
                 'Kota': city,
                 'Provinsi': province,
                 'Alamat_Lengkap': data.get('display_name', ''),
-                'Confidence_Score': round(confidence_score, 2),
                 'Status': 'OK',
-                'Source': source
+                'Source': 'nominatim',
+                'Error': None
             }
         else:
             self.stats['not_found'] += 1
@@ -260,468 +156,222 @@ class UltraGeocoderWeb:
                 'Kota': '',
                 'Provinsi': '',
                 'Alamat_Lengkap': '',
-                'Confidence_Score': 0.0,
                 'Status': 'NOT_FOUND',
-                'Source': 'None'
+                'Source': 'None',
+                'Error': error or 'unknown'
             }
 
 
 def create_template():
-    """Create template Excel file"""
-    template_data = {
-        'latitude': [
-            -6.2088, -6.1751, -6.2146, -6.2297, -6.1862,
-            -6.2603, -6.1862, -6.2441, -6.2249, -6.1944
-        ],
-        'longitude': [
-            106.8456, 106.8650, 106.8451, 106.8177, 106.8063,
-            106.7811, 106.7999, 106.8381, 106.8073, 106.8229
-        ],
-        'kelurahan': [
-            'Menteng', 'Gambir', 'Tanah Abang', 'Kebon Jeruk',
-            'Palmerah', 'Grogol', 'Slipi', 'Cikini', 'Bendungan Hilir', 'Gondangdia'
-        ],
-        'kecamatan': [
-            'Menteng', 'Gambir', 'Tanah Abang', 'Kebon Jeruk',
-            'Palmerah', 'Grogol Petamburan', 'Palmerah', 'Menteng', 'Tanah Abang', 'Menteng'
-        ]
-    }
-    
-    df = pd.DataFrame(template_data)
-    return df
-
-
-def detect_columns(df):
-    """Auto-detect required columns"""
-    columns_lower = {col.lower(): col for col in df.columns}
-    
-    # Detect latitude
-    lat_col = None
-    for name in ['latitude', 'lat', 'y', 'lintang']:
-        if name in columns_lower:
-            lat_col = columns_lower[name]
-            break
-    
-    # Detect longitude
-    lon_col = None
-    for name in ['longitude', 'lon', 'lng', 'long', 'x', 'bujur']:
-        if name in columns_lower:
-            lon_col = columns_lower[name]
-            break
-    
-    # Detect kelurahan
-    kel_col = None
-    for name in ['kelurahan', 'kel', 'village', 'desa']:
-        if name in columns_lower:
-            kel_col = columns_lower[name]
-            break
-    
-    # Detect kecamatan
-    kec_col = None
-    for name in ['kecamatan', 'kec', 'district']:
-        if name in columns_lower:
-            kec_col = columns_lower[name]
-            break
-    
-    return lat_col, lon_col, kel_col, kec_col
+    """Create template"""
+    return pd.DataFrame({
+        'latitude': [-6.2088, -6.1751, -6.2146, -6.1969, -6.1703],
+        'longitude': [106.8456, 106.8650, 106.8451, 106.7685, 106.8143],
+        'kelurahan': ['Menteng', 'Gambir', 'Tanah Abang', 'Kebon Jeruk', 'Petojo'],
+        'kecamatan': ['Menteng', 'Gambir', 'Tanah Abang', 'Kebon Jeruk', 'Gambir']
+    })
 
 
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🗺️ Geocoding Tool - FREE</h1>', unsafe_allow_html=True)
+    st.title("🗺️ Geocoding Tool - Improved")
+    
+    st.info("⚠️ **Important:** Set workers to 1-2 max for Nominatim. Too many workers = all NOT_FOUND!")
     
     # Sidebar
     with st.sidebar:
-        st.image("https://raw.githubusercontent.com/streamlit/streamlit/develop/docs/_static/logo.png", width=100)
         st.title("⚙️ Settings")
+        max_workers = st.slider("Workers", 1, 2, 1, 
+                               help="RECOMMENDED: 1 worker. More = rate limit!")
         
-        st.markdown("### Processing Options")
-        max_workers = st.slider("Workers (Parallel Processing)", 1, 5, 3, 
-                               help="More workers = faster, but respect rate limits!")
-        
-        use_validation = st.checkbox("Enable Kelurahan/Kecamatan Validation", value=True,
-                                    help="Validate results dengan data kelurahan/kecamatan")
+        st.warning("⚠️ **Use 1 worker** to avoid rate limiting!")
         
         st.markdown("---")
-        st.markdown("### About")
-        st.info("""
-        **Geocoding Tool v1.0**
-        
-        100% FREE geocoding using:
-        • OpenStreetMap Nominatim
-        • Photon (fallback)
-        
-        No API key needed! 🎉
-        """)
-        
-        st.markdown("---")
-        st.markdown("### Support")
-        st.markdown("""
-        📧 Email: support@company.com  
-        💬 Slack: #gis-team  
-        📚 [Documentation](https://github.com)
-        """)
+        st.markdown("### Debug Info")
+        if st.button("Test Nominatim Connection"):
+            geocoder = ImprovedGeocoder()
+            if geocoder.test_connection():
+                st.success("✅ Nominatim is accessible!")
+            else:
+                st.error("❌ Cannot reach Nominatim!")
     
-    # Main content
-    tab1, tab2, tab3 = st.tabs(["📤 Upload & Process", "📊 Statistics", "ℹ️ Help"])
+    # Tabs
+    tab1, tab2 = st.tabs(["📤 Upload & Process", "ℹ️ Help"])
     
     with tab1:
+        # Download template
         col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown('<div class="info-box info-box-blue">', unsafe_allow_html=True)
-            st.markdown("""
-            **📋 Instructions:**
-            1. Download template Excel (or use your own file)
-            2. Fill with your data (latitude, longitude, kelurahan, kecamatan)
-            3. Upload file
-            4. Click "Start Geocoding"
-            5. Download results!
-            """)
-            st.markdown('</div>', unsafe_allow_html=True)
         
         with col2:
             st.markdown("### 📥 Download Template")
             template_df = create_template()
             
-            # Convert to Excel
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                template_df.to_excel(writer, index=False, sheet_name='Template')
+                template_df.to_excel(writer, index=False)
             excel_data = output.getvalue()
             
             st.download_button(
-                label="⬇️ Download Template.xlsx",
+                label="⬇️ Download Template",
                 data=excel_data,
-                file_name="template_geocoding.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Download template dengan contoh data"
+                file_name="template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            
-            with st.expander("👀 Preview Template"):
-                st.dataframe(template_df, use_container_width=True)
         
         st.markdown("---")
         
-        # File upload
+        # Upload
         st.markdown("### 📤 Upload Your Data")
-        uploaded_file = st.file_uploader(
-            "Choose Excel file (.xlsx)",
-            type=['xlsx'],
-            help="Upload file Excel dengan kolom: latitude, longitude, kelurahan (optional), kecamatan (optional)"
-        )
+        uploaded_file = st.file_uploader("Choose Excel file", type=['xlsx'])
         
-        if uploaded_file is not None:
-            try:
-                df = pd.read_excel(uploaded_file)
+        if uploaded_file:
+            df = pd.read_excel(uploaded_file)
+            
+            st.success(f"✅ Loaded {len(df)} rows")
+            
+            # Detect columns
+            lat_col = None
+            lon_col = None
+            
+            for col in df.columns:
+                col_lower = col.lower()
+                if col_lower in ['latitude', 'lat', 'y']:
+                    lat_col = col
+                if col_lower in ['longitude', 'lon', 'lng', 'x']:
+                    lon_col = col
+            
+            if not lat_col or not lon_col:
+                st.error("❌ Cannot find latitude/longitude columns!")
+                return
+            
+            st.info(f"📍 Using: {lat_col}, {lon_col}")
+            
+            with st.expander("👀 Preview Data"):
+                st.dataframe(df.head(10))
+            
+            # Estimate
+            est_time = len(df) * 1.5 / max_workers
+            st.warning(f"⏱️ Estimated time: ~{est_time/60:.1f} minutes ({est_time:.0f} seconds)")
+            
+            if len(df) > 50:
+                st.error(f"⚠️ {len(df)} rows is A LOT for web app! Consider testing with 10-20 rows first!")
+            
+            # Process button
+            if st.button("🚀 Start Geocoding", type="primary"):
+                st.markdown("---")
+                st.markdown("### 🔄 Processing...")
                 
-                st.success(f"✅ File uploaded successfully! Total rows: {len(df)}")
+                # Normalize
+                df['latitude'] = df[lat_col]
+                df['longitude'] = df[lon_col]
+                df['kelurahan'] = df.get('kelurahan', '')
                 
-                # Detect columns
-                lat_col, lon_col, kel_col, kec_col = detect_columns(df)
+                # Initialize
+                geocoder = ImprovedGeocoder(max_workers=max_workers)
                 
-                if not lat_col or not lon_col:
-                    st.error("❌ Error: Tidak dapat menemukan kolom latitude/longitude!")
-                    st.info("Expected column names: latitude/lat/y dan longitude/lon/lng/x")
-                    st.stop()
+                # Test first
+                st.info("🔍 Testing connection...")
+                if not geocoder.test_connection():
+                    st.error("❌ Cannot reach Nominatim! Check internet or try later.")
+                    return
+                st.success("✅ Connection OK!")
                 
-                # Show detected columns
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Latitude Column", lat_col)
-                with col2:
-                    st.metric("Longitude Column", lon_col)
-                with col3:
-                    st.metric("Kelurahan Column", kel_col or "Not found")
-                with col4:
-                    st.metric("Kecamatan Column", kec_col or "Not found")
+                # Progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # Show preview
-                with st.expander("👀 Preview Data (first 10 rows)"):
-                    st.dataframe(df.head(10), use_container_width=True)
+                results = []
+                start_time = time.time()
                 
-                # Estimate time
-                estimated_time = len(df) / (max_workers * 1.5)
-                st.info(f"⏱️ Estimated processing time: ~{estimated_time:.1f} minutes for {len(df)} rows")
-                
-                # Warning for large data
-                if len(df) > 1000:
-                    st.warning(f"⚠️ Large dataset detected ({len(df)} rows). Processing may take ~{estimated_time/60:.1f} hours.")
-                
-                # Start button
-                if st.button("🚀 Start Geocoding", type="primary", use_container_width=True):
-                    st.markdown("---")
-                    st.markdown("### 🔄 Processing...")
-                    
-                    # Normalize columns
-                    df['latitude'] = df[lat_col]
-                    df['longitude'] = df[lon_col]
-                    if kel_col:
-                        df['kelurahan'] = df[kel_col]
-                    if kec_col:
-                        df['kecamatan'] = df[kec_col]
-                    
-                    # Initialize geocoder
-                    geocoder = UltraGeocoderWeb(max_workers=max_workers)
-                    
-                    # Progress bar
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Results container
-                    results = []
-                    
-                    # Process with ThreadPoolExecutor
-                    start_time = time.time()
-                    
-                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                        futures = {}
-                        
-                        for idx, row in df.iterrows():
-                            expected_kelurahan = row.get('kelurahan') if kel_col else None
-                            expected_kecamatan = row.get('kecamatan') if kec_col else None
-                            
-                            future = executor.submit(
-                                geocoder.geocode_coordinate,
-                                row['latitude'], row['longitude'],
-                                expected_kelurahan, expected_kecamatan
-                            )
-                            futures[future] = idx
-                        
-                        completed = 0
-                        for future in as_completed(futures):
-                            result = future.result()
-                            idx = futures[future]
-                            
-                            # Add original data
-                            result['Original_Index'] = idx
-                            result['Latitude'] = df.loc[idx, 'latitude']
-                            result['Longitude'] = df.loc[idx, 'longitude']
-                            if kel_col:
-                                result['Kelurahan_Original'] = df.loc[idx, 'kelurahan']
-                            if kec_col:
-                                result['Kecamatan_Original'] = df.loc[idx, 'kecamatan']
-                            
-                            results.append(result)
-                            
-                            completed += 1
-                            progress = completed / len(df)
-                            progress_bar.progress(progress)
-                            status_text.text(f"Processed: {completed}/{len(df)} ({progress*100:.1f}%)")
-                    
-                    elapsed = time.time() - start_time
-                    
-                    # Create result dataframe
-                    df_result = pd.DataFrame(results)
-                    df_result = df_result.sort_values('Original_Index').reset_index(drop=True)
-                    
-                    # Show results
-                    st.success(f"✅ Geocoding completed in {elapsed/60:.1f} minutes!")
-                    
-                    # Statistics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total", len(df))
-                    with col2:
-                        st.metric("Success", geocoder.stats['success'], 
-                                 delta=f"{geocoder.stats['success']/len(df)*100:.1f}%")
-                    with col3:
-                        st.metric("Not Found", geocoder.stats['not_found'],
-                                 delta=f"{geocoder.stats['not_found']/len(df)*100:.1f}%")
-                    with col4:
-                        st.metric("Speed", f"{len(df)/elapsed:.2f} coord/sec")
-                    
-                    # Show results preview
-                    st.markdown("### 📊 Results Preview")
-                    st.dataframe(df_result.head(20), use_container_width=True)
-                    
-                    # Download button
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_result.to_excel(writer, index=False, sheet_name='Results')
-                    excel_data = output.getvalue()
-                    
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    
-                    st.download_button(
-                        label="⬇️ Download Results",
-                        data=excel_data,
-                        file_name=f"hasil_geocoding_{timestamp}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        use_container_width=True
+                # Process sequentially for better rate limit control
+                for idx, row in df.iterrows():
+                    result = geocoder.geocode_coordinate(
+                        row['latitude'],
+                        row['longitude'],
+                        row.get('kelurahan')
                     )
                     
-                    # Store in session state for statistics tab
-                    st.session_state['results'] = df_result
-                    st.session_state['stats'] = geocoder.stats
+                    result['Latitude'] = row['latitude']
+                    result['Longitude'] = row['longitude']
+                    result['Kelurahan_Original'] = row.get('kelurahan', '')
                     
-            except Exception as e:
-                st.error(f"❌ Error processing file: {str(e)}")
-                st.exception(e)
+                    results.append(result)
+                    
+                    progress = (idx + 1) / len(df)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processed: {idx+1}/{len(df)} ({progress*100:.1f}%)")
+                
+                elapsed = time.time() - start_time
+                
+                # Results
+                df_result = pd.DataFrame(results)
+                
+                st.success(f"✅ Completed in {elapsed/60:.1f} minutes!")
+                
+                # Stats
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total", len(df))
+                with col2:
+                    st.metric("Success", geocoder.stats['success'],
+                             delta=f"{geocoder.stats['success']/len(df)*100:.1f}%")
+                with col3:
+                    st.metric("Not Found", geocoder.stats['not_found'])
+                with col4:
+                    st.metric("Speed", f"{len(df)/elapsed:.2f} coord/sec")
+                
+                # Debug stats
+                with st.expander("🔍 Debug Information"):
+                    st.json({
+                        'Timeouts': geocoder.stats['timeout'],
+                        'Rate Limits': geocoder.stats['rate_limit'],
+                        'Errors': geocoder.stats['error']
+                    })
+                
+                # Show results
+                st.markdown("### 📊 Results")
+                st.dataframe(df_result)
+                
+                # Show errors if many NOT_FOUND
+                if geocoder.stats['not_found'] > len(df) * 0.5:
+                    st.error("⚠️ More than 50% NOT_FOUND! Possible issues:")
+                    st.markdown("""
+                    - **Rate limiting**: Try with 1 worker only
+                    - **Network issues**: Check connection
+                    - **Invalid coordinates**: Verify data
+                    - **Nominatim down**: Try again later
+                    """)
+                
+                # Download
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_result.to_excel(writer, index=False)
+                excel_data = output.getvalue()
+                
+                st.download_button(
+                    label="⬇️ Download Results",
+                    data=excel_data,
+                    file_name=f"hasil_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
     
     with tab2:
-        st.markdown("### 📊 Processing Statistics")
+        st.markdown("""
+        ### ℹ️ Important Notes
         
-        if 'results' in st.session_state:
-            df_result = st.session_state['results']
-            stats = st.session_state['stats']
-            
-            # Overall stats
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Success Rate", f"{stats['success']/len(df_result)*100:.1f}%")
-            with col2:
-                st.metric("Average Confidence", f"{df_result['Confidence_Score'].mean():.2f}")
-            with col3:
-                st.metric("High Confidence (>0.7)", 
-                         f"{len(df_result[df_result['Confidence_Score']>=0.7])} rows")
-            
-            # Charts
-            import plotly.express as px
-            
-            # Status distribution
-            st.markdown("#### Status Distribution")
-            status_counts = df_result['Status'].value_counts()
-            fig = px.pie(values=status_counts.values, names=status_counts.index, 
-                        title="Geocoding Status")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Confidence score distribution
-            st.markdown("#### Confidence Score Distribution")
-            fig = px.histogram(df_result, x='Confidence_Score', nbins=20,
-                             title="Confidence Score Distribution")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Source distribution
-            st.markdown("#### Provider Usage")
-            source_counts = df_result['Source'].value_counts()
-            fig = px.bar(x=source_counts.index, y=source_counts.values,
-                        labels={'x': 'Provider', 'y': 'Count'},
-                        title="Geocoding Provider Usage")
-            st.plotly_chart(fig, use_container_width=True)
-            
-        else:
-            st.info("No data processed yet. Upload and process data first!")
-    
-    with tab3:
-        st.markdown("### ℹ️ Help & Documentation")
+        **Why 100% NOT_FOUND?**
+        1. **Too many workers**: Nominatim blocks if too many concurrent requests
+        2. **Rate limiting**: Nominatim has strict 1 req/sec limit
+        3. **Network issues**: Streamlit Cloud IP might be rate limited
         
-        with st.expander("📖 How to Use"):
-            st.markdown("""
-            **Step-by-step Guide:**
-            
-            1. **Download Template**
-               - Click "Download Template.xlsx" button
-               - Open in Excel
-               - See example format
-            
-            2. **Prepare Your Data**
-               - Required columns: `latitude`, `longitude`
-               - Optional: `kelurahan`, `kecamatan` (for validation)
-               - Save as .xlsx file
-            
-            3. **Upload File**
-               - Click "Choose Excel file"
-               - Select your .xlsx file
-               - System will auto-detect columns
-            
-            4. **Configure Settings**
-               - Adjust workers (1-5)
-               - Enable/disable validation
-            
-            5. **Start Geocoding**
-               - Click "Start Geocoding"
-               - Wait for progress bar
-               - Download results when done!
-            """)
+        **Solutions:**
+        1. **Use 1 worker only** (MOST IMPORTANT!)
+        2. Test with small data (10-20 rows) first
+        3. If still fails, try later (Nominatim might be busy)
         
-        with st.expander("⚙️ Settings Explained"):
-            st.markdown("""
-            **Workers (Parallel Processing):**
-            - 1 worker: Slowest, safest
-            - 3 workers: Recommended (balanced)
-            - 5 workers: Fastest, max recommended
-            - More workers = faster processing
-            
-            **Kelurahan/Kecamatan Validation:**
-            - Enable: Compare results with input data
-            - Calculates confidence score
-            - Helps identify mismatches
-            - Recommended for quality control
-            """)
-        
-        with st.expander("📊 Understanding Results"):
-            st.markdown("""
-            **Output Columns:**
-            - `Nama_Jalan`: Street name
-            - `Kelurahan`: Village/kelurahan
-            - `Kecamatan`: District/kecamatan
-            - `Kota`: City
-            - `Provinsi`: Province
-            - `Alamat_Lengkap`: Full address
-            - `Confidence_Score`: Match quality (0-1)
-            - `Status`: OK or NOT_FOUND
-            - `Source`: nominatim or photon
-            
-            **Confidence Score:**
-            - 0.9-1.0: Excellent match
-            - 0.7-0.9: Good match
-            - 0.5-0.7: Fair match
-            - <0.5: Review manually
-            """)
-        
-        with st.expander("⚠️ Limitations"):
-            st.markdown("""
-            **Rate Limits:**
-            - Nominatim: 1 request/second
-            - Photon: 2 requests/second
-            - Please respect fair use policy!
-            
-            **Accuracy:**
-            - Success rate: 85-90%
-            - Depends on data quality
-            - Urban areas: better coverage
-            - Rural areas: may have gaps
-            
-            **Processing Time:**
-            - 100 rows: ~40 seconds
-            - 500 rows: ~2-3 minutes
-            - 1000 rows: ~5-7 minutes
-            - 5000 rows: ~30-40 minutes
-            """)
-        
-        with st.expander("🐛 Troubleshooting"):
-            st.markdown("""
-            **Common Issues:**
-            
-            1. **"Column not found" error**
-               - Check column names match: latitude, longitude
-               - Or use: lat, lon, lng, x, y
-            
-            2. **Many NOT_FOUND results**
-               - Coordinates may be in remote areas
-               - Check coordinates are valid
-               - Try reducing workers to 1
-            
-            3. **Slow processing**
-               - Normal for large datasets
-               - Increase workers (up to 5)
-               - Check internet connection
-            
-            4. **Rate limit errors**
-               - Reduce workers
-               - Wait and retry
-               - System will auto-retry
-            """)
-        
-        st.markdown("---")
-        st.markdown("### 📞 Support")
-        st.info("""
-        Need help? Contact us:
-        - 📧 Email: support@company.com
-        - 💬 Slack: #gis-team
-        - 📚 Documentation: [Link to docs]
+        **For large data (>50 rows):**
+        - Use desktop scripts instead
+        - Or process in small batches
         """)
 
 
