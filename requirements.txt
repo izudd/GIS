@@ -1,0 +1,16 @@
+# Python GIS Toolkit Requirements
+# Works for both desktop scripts and Streamlit web app
+
+# Core dependencies
+pandas>=2.0.0
+requests>=2.31.0
+openpyxl>=3.1.0
+
+# For desktop scripts
+tqdm>=4.64.0
+
+# For web app (Streamlit)
+streamlit>=1.28.0
+plotly>=5.17.0
+xlsxwriter>=3.1.0
+python-dateutil>=2.8.2
